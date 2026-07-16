@@ -1,0 +1,765 @@
+// =============================================================================
+// HomeFeast – Prisma Schema
+// PostgreSQL · Enterprise-Grade · Production-Ready
+// Supports 100,000+ users · Normalized · Fully Indexed
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  customer
+  provider
+  admin
+}
+
+enum ProviderStatus {
+  pending
+  approved
+  rejected
+  suspended
+}
+
+enum MealType {
+  breakfast
+  lunch
+  dinner
+  snack
+  all
+}
+
+enum OrderStatus {
+  pending
+  accepted
+  preparing
+  out_for_delivery
+  delivered
+  cancelled
+  rejected
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  refunded
+  failed
+}
+
+enum PaymentMethod {
+  cod
+  online
+  wallet
+}
+
+enum SubscriptionStatus {
+  active
+  paused
+  cancelled
+  expired
+}
+
+enum NotificationType {
+  order_created
+  order_accepted
+  order_rejected
+  order_delivered
+  subscription_expiring
+  new_review
+  provider_approved
+  complaint_resolved
+}
+
+enum ComplaintCategory {
+  food_quality
+  delivery
+  payment
+  provider
+  other
+}
+
+enum ComplaintStatus {
+  open
+  in_progress
+  resolved
+  closed
+}
+
+enum ComplaintPriority {
+  low
+  medium
+  high
+}
+
+enum DayOfWeek {
+  Mon
+  Tue
+  Wed
+  Thu
+  Fri
+  Sat
+  Sun
+}
+
+enum DocumentType {
+  fssai_license
+  id_proof
+  address_proof 
+  bank_statement
+}
+
+enum DocumentStatus {
+  pending
+  verified
+  rejected
+}
+
+enum CouponType {
+  percentage
+  flat
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  BOTH
+}
+
+// =============================================================================
+// USERS
+// =============================================================================
+
+model User {
+  id                   String       @id @default(uuid()) @db.Uuid
+  name                 String       @db.VarChar(60)
+  email                String       @unique @db.VarChar(255)
+  password             String       @db.VarChar(255)
+  phone                String       @unique @db.VarChar(20)
+  role                 UserRole     @default(customer)
+  provider             AuthProvider @default(LOCAL)
+  googleId             String?      @unique @db.VarChar(255)
+  avatar               String?      @db.VarChar(500)
+  isActive             Boolean      @default(true)
+  isEmailVerified      Boolean      @default(false)
+  refreshToken         String?      @db.Text
+  passwordResetToken   String?      @db.VarChar(255)
+  passwordResetExpires DateTime?
+  emailOtpHash        String?       @db.VarChar(255)
+  emailOtpExpires     DateTime?
+  emailOtpSentAt      DateTime?
+  emailOtpResendCount Int           @default(0)
+  emailOtpAttempts    Int           @default(0)
+  lastLoginAt          DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  deletedAt            DateTime?
+
+  // Relations
+  providerProfile Provider? @relation("providerProfile")
+  addresses       UserAddress[]
+  orders          Order[]         @relation("CustomerOrders")
+  subscriptions   Subscription[]  @relation("CustomerSubscriptions")
+  reviews         Review[]        @relation("CustomerReviews")
+  complaints      Complaint[]     @relation("CustomerComplaints")
+  notifications   Notification[]
+  resolvedComplaints Complaint[]  @relation("ResolvedByAdmin")
+  authAccounts    AuthAccount[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([googleId])
+  @@index([role, isActive])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// =============================================================================
+// AUTH ACCOUNTS — Social / OAuth identity providers
+// =============================================================================
+
+model AuthAccount {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @db.Uuid
+  provider          String   @db.VarChar(50)
+  providerAccountId String   @db.VarChar(255)
+  email             String?  @db.VarChar(255)
+  name              String?  @db.VarChar(100)
+  picture           String?  @db.VarChar(500)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("auth_accounts")
+}
+
+// =============================================================================
+// USER ADDRESSES
+// =============================================================================
+
+model UserAddress {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  label        String   @default("Home") @db.VarChar(50)
+  street       String   @db.VarChar(255)
+  city         String   @db.VarChar(100)
+  state        String   @db.VarChar(100)
+  pincode      String   @db.VarChar(10)
+  country      String   @default("India") @db.VarChar(100)
+  latitude     Decimal? @db.Decimal(10, 8)
+  longitude    Decimal? @db.Decimal(11, 8)
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders       Order[]
+  subscriptions Subscription[]
+
+  @@index([userId])
+  @@index([city])
+  @@index([pincode])
+  @@map("user_addresses")
+}
+
+// =============================================================================
+// PROVIDERS
+// =============================================================================
+
+model Provider {
+  id               String         @id @default(uuid()) @db.Uuid
+  userId           String         @unique @db.Uuid
+  businessName     String         @db.VarChar(150)
+  slug             String         @unique @db.VarChar(200)
+  description      String?        @db.VarChar(1000)
+  coverImage       String?        @db.VarChar(500)
+  street           String?        @db.VarChar(255)
+  city             String?        @db.VarChar(100)
+  state            String?        @db.VarChar(100)
+  pincode          String?        @db.VarChar(10)
+  latitude         Decimal?       @db.Decimal(10, 8)
+  longitude        Decimal?       @db.Decimal(11, 8)
+  deliveryRadius   Int            @default(10)
+  minOrderAmount   Decimal        @default(0) @db.Decimal(10, 2)
+  status           ProviderStatus @default(pending)
+  isAvailable      Boolean        @default(true)
+  rating           Decimal        @default(0) @db.Decimal(3, 2)
+  totalReviews     Int            @default(0)
+  totalOrders      Int            @default(0)
+  totalEarnings    Decimal        @default(0) @db.Decimal(12, 2)
+  openTime         String?        @db.VarChar(10)
+  closeTime        String?        @db.VarChar(10)
+  // Bank details (encrypted in production)
+  bankAccountHolder String?       @db.VarChar(100)
+  bankAccountNumber String?       @db.VarChar(50)
+  bankIfsc         String?        @db.VarChar(20)
+  upiId            String?        @db.VarChar(100)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  deletedAt        DateTime?
+
+  // Relations
+  user             User                  @relation("providerProfile", fields: [userId], references: [id], onDelete: Cascade)
+  cuisines         ProviderCuisine[]
+  operatingDays    ProviderAvailability[]
+  serviceAreas     ProviderServiceArea[]
+  documents        ProviderDocument[]
+  menuItems        MenuItem[]
+  mealPlans        MealPlan[]
+  orders           Order[]               @relation("ProviderOrders")
+  subscriptions    Subscription[]        @relation("ProviderSubscriptions")
+  reviews          Review[]              @relation("ProviderReviews")
+  complaints       Complaint[]           @relation("ProviderComplaints")
+  earnings         Earning[]
+
+  @@index([status, isAvailable])
+  @@index([city])
+  @@index([rating])
+  @@index([deletedAt])
+  @@map("providers")
+}
+
+// =============================================================================
+// PROVIDER AVAILABILITY (Operating Days)
+// =============================================================================
+
+model ProviderAvailability {
+  id         String    @id @default(uuid()) @db.Uuid
+  providerId String    @db.Uuid
+  day        DayOfWeek
+  openTime   String    @db.VarChar(10)
+  closeTime  String    @db.VarChar(10)
+  isActive   Boolean   @default(true)
+
+  provider   Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, day])
+  @@map("provider_availability")
+}
+
+// =============================================================================
+// PROVIDER SERVICE AREAS
+// =============================================================================
+
+model ProviderServiceArea {
+  id         String   @id @default(uuid()) @db.Uuid
+  providerId String   @db.Uuid
+  city       String   @db.VarChar(100)
+  pincode    String   @db.VarChar(10)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, pincode])
+  @@index([city])
+  @@index([pincode])
+  @@map("provider_service_areas")
+}
+
+// =============================================================================
+// PROVIDER DOCUMENTS
+// =============================================================================
+
+model ProviderDocument {
+  id           String         @id @default(uuid()) @db.Uuid
+  providerId   String         @db.Uuid
+  type         DocumentType
+  fileUrl      String         @db.VarChar(500)
+  status       DocumentStatus @default(pending)
+  rejectionNote String?       @db.VarChar(300)
+  verifiedAt   DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  provider     Provider       @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, status])
+  @@map("provider_documents")
+}
+
+// =============================================================================
+// CATEGORIES
+// =============================================================================
+
+model Category {
+  id          String     @id @default(uuid()) @db.Uuid
+  name        String     @unique @db.VarChar(100)
+  slug        String     @unique @db.VarChar(120)
+  description String?    @db.VarChar(300)
+  image       String?    @db.VarChar(500)
+  isActive    Boolean    @default(true)
+  sortOrder   Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  menuItems   MenuItem[]
+
+  @@index([slug])
+  @@index([isActive, sortOrder])
+  @@map("categories")
+}
+
+// =============================================================================
+// CUISINES
+// =============================================================================
+
+model Cuisine {
+  id        String            @id @default(uuid()) @db.Uuid
+  name      String            @unique @db.VarChar(100)
+  slug      String            @unique @db.VarChar(120)
+  isActive  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+
+  providers ProviderCuisine[]
+  menuItems MenuItem[]
+
+  @@index([slug])
+  @@map("cuisines")
+}
+
+// =============================================================================
+// PROVIDER ↔ CUISINE (Many-to-Many Join Table)
+// =============================================================================
+
+model ProviderCuisine {
+  providerId String   @db.Uuid
+  cuisineId  String   @db.Uuid
+
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  cuisine    Cuisine  @relation(fields: [cuisineId], references: [id], onDelete: Cascade)
+
+  @@id([providerId, cuisineId])
+  @@map("provider_cuisines")
+}
+
+// =============================================================================
+// MENU ITEMS
+// =============================================================================
+
+model MenuItem {
+  id              String    @id @default(uuid()) @db.Uuid
+  providerId      String    @db.Uuid
+  categoryId      String    @db.Uuid
+  cuisineId       String?   @db.Uuid
+  name            String    @db.VarChar(150)
+  description     String?   @db.VarChar(500)
+  price           Decimal   @db.Decimal(10, 2)
+  mealType        MealType
+  isVeg           Boolean   @default(true)
+  isAvailable     Boolean   @default(true)
+  preparationTime Int       @default(30)
+  calories        Int?
+  protein         Decimal?  @db.Decimal(6, 2)
+  carbs           Decimal?  @db.Decimal(6, 2)
+  fat             Decimal?  @db.Decimal(6, 2)
+  sortOrder       Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  // Relations
+  provider        Provider    @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  category        Category    @relation(fields: [categoryId], references: [id])
+  cuisine         Cuisine?    @relation(fields: [cuisineId], references: [id])
+  images          MenuImage[]
+  orderItems      OrderItem[]
+
+  @@index([providerId, isAvailable])
+  @@index([mealType])
+  @@index([price])
+  @@index([deletedAt])
+  @@map("menu_items")
+}
+
+// =============================================================================
+// MENU IMAGES
+// =============================================================================
+
+model MenuImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  menuItemId String   @db.Uuid
+  url        String   @db.VarChar(500)
+  altText    String?  @db.VarChar(200)
+  isPrimary  Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([menuItemId])
+  @@map("menu_images")
+}
+
+// =============================================================================
+// MEAL PLANS (Subscription Plans offered by Providers)
+// =============================================================================
+
+model MealPlan {
+  id             String    @id @default(uuid()) @db.Uuid
+  providerId     String    @db.Uuid
+  name           String    @db.VarChar(100)
+  description    String?   @db.VarChar(500)
+  mealType       MealType
+  mealsPerDay    Int       @default(1)
+  daysPerWeek    Int       @default(5)
+  pricePerMonth  Decimal   @db.Decimal(10, 2)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  provider       Provider       @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  subscriptions  Subscription[]
+
+  @@index([providerId, isActive])
+  @@map("meal_plans")
+}
+
+// =============================================================================
+// ORDERS
+// =============================================================================
+
+model Order {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderNumber       String        @unique @db.VarChar(30)
+  customerId        String        @db.Uuid
+  providerId        String        @db.Uuid
+  addressId         String?       @db.Uuid
+  // Snapshot of delivery address at time of order
+  deliveryStreet    String?       @db.VarChar(255)
+  deliveryCity      String?       @db.VarChar(100)
+  deliveryState     String?       @db.VarChar(100)
+  deliveryPincode   String?       @db.VarChar(10)
+  subtotal          Decimal       @db.Decimal(10, 2)
+  deliveryFee       Decimal       @default(0) @db.Decimal(10, 2)
+  discount          Decimal       @default(0) @db.Decimal(10, 2)
+  total             Decimal       @db.Decimal(10, 2)
+  status            OrderStatus   @default(pending)
+  paymentStatus     PaymentStatus @default(pending)
+  paymentMethod     PaymentMethod @default(cod)
+  scheduledFor      DateTime?
+  notes             String?       @db.VarChar(500)
+  rejectionReason   String?       @db.VarChar(300)
+  isSubscriptionOrder Boolean     @default(false)
+  subscriptionId    String?       @db.Uuid
+  couponId          String?       @db.Uuid
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
+
+  // Relations
+  customer          User          @relation("CustomerOrders", fields: [customerId], references: [id])
+  provider          Provider      @relation("ProviderOrders", fields: [providerId], references: [id])
+  address           UserAddress?  @relation(fields: [addressId], references: [id])
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id])
+  coupon            Coupon?       @relation(fields: [couponId], references: [id])
+  items             OrderItem[]
+  review            Review?
+  payment           Payment?
+  complaints        Complaint[]
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([providerId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([orderNumber])
+  @@index([deletedAt])
+  @@map("orders")
+}
+
+// =============================================================================
+// ORDER ITEMS
+// =============================================================================
+
+model OrderItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  menuItemId String   @db.Uuid
+  // Snapshot of item details at time of order
+  name       String   @db.VarChar(150)
+  price      Decimal  @db.Decimal(10, 2)
+  quantity   Int
+  subtotal   Decimal  @db.Decimal(10, 2)
+
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// =============================================================================
+// SUBSCRIPTIONS
+// =============================================================================
+
+model Subscription {
+  id              String             @id @default(uuid()) @db.Uuid
+  customerId      String             @db.Uuid
+  providerId      String             @db.Uuid
+  mealPlanId      String             @db.Uuid
+  addressId       String?            @db.Uuid
+  // Snapshot of plan at time of subscription
+  planName        String             @db.VarChar(100)
+  mealType        MealType
+  mealsPerDay     Int                @default(1)
+  daysPerWeek     Int                @default(5)
+  pricePerMonth   Decimal            @db.Decimal(10, 2)
+  // Delivery address snapshot
+  deliveryStreet  String?            @db.VarChar(255)
+  deliveryCity    String?            @db.VarChar(100)
+  deliveryState   String?            @db.VarChar(100)
+  deliveryPincode String?            @db.VarChar(10)
+  startDate       DateTime           @db.Date
+  endDate         DateTime           @db.Date
+  status          SubscriptionStatus @default(active)
+  autoRenew       Boolean            @default(false)
+  pausedUntil     DateTime?
+  totalPaid       Decimal            @default(0) @db.Decimal(10, 2)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  deletedAt       DateTime?
+
+  // Relations
+  customer        User               @relation("CustomerSubscriptions", fields: [customerId], references: [id])
+  provider        Provider           @relation("ProviderSubscriptions", fields: [providerId], references: [id])
+  mealPlan        MealPlan           @relation(fields: [mealPlanId], references: [id])
+  address         UserAddress?       @relation(fields: [addressId], references: [id])
+  orders          Order[]
+  payments        Payment[]
+
+  @@index([customerId, status])
+  @@index([providerId, status])
+  @@index([endDate, status])
+  @@index([deletedAt])
+  @@map("subscriptions")
+}
+
+// =============================================================================
+// REVIEWS
+// =============================================================================
+
+model Review {
+  id               String   @id @default(uuid()) @db.Uuid
+  customerId       String   @db.Uuid
+  providerId       String   @db.Uuid
+  orderId          String   @unique @db.Uuid
+  rating           Int
+  comment          String?  @db.VarChar(1000)
+  images           String[] @db.VarChar(500)
+  isVisible        Boolean  @default(true)
+  providerReply    String?  @db.VarChar(500)
+  providerRepliedAt DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  customer         User     @relation("CustomerReviews", fields: [customerId], references: [id])
+  provider         Provider @relation("ProviderReviews", fields: [providerId], references: [id])
+  order            Order    @relation(fields: [orderId], references: [id])
+
+  @@index([providerId, isVisible])
+  @@index([customerId])
+  @@index([rating])
+  @@map("reviews")
+}
+
+// =============================================================================
+// COMPLAINTS
+// =============================================================================
+
+model Complaint {
+  id           String            @id @default(uuid()) @db.Uuid
+  customerId   String            @db.Uuid
+  providerId   String?           @db.Uuid
+  orderId      String?           @db.Uuid
+  subject      String            @db.VarChar(200)
+  description  String            @db.VarChar(2000)
+  category     ComplaintCategory
+  status       ComplaintStatus   @default(open)
+  priority     ComplaintPriority @default(medium)
+  resolution   String?           @db.VarChar(1000)
+  resolvedById String?           @db.Uuid
+  resolvedAt   DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  customer     User              @relation("CustomerComplaints", fields: [customerId], references: [id])
+  provider     Provider?         @relation("ProviderComplaints", fields: [providerId], references: [id])
+  order        Order?            @relation(fields: [orderId], references: [id])
+  resolvedBy   User?             @relation("ResolvedByAdmin", fields: [resolvedById], references: [id])
+
+  @@index([status, priority])
+  @@index([customerId])
+  @@index([providerId])
+  @@map("complaints")
+}
+
+// =============================================================================
+// NOTIFICATIONS
+// =============================================================================
+
+model Notification {
+  id          String           @id @default(uuid()) @db.Uuid
+  recipientId String           @db.Uuid
+  type        NotificationType
+  title       String           @db.VarChar(200)
+  message     String           @db.VarChar(1000)
+  data        Json?
+  isRead      Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+
+  recipient   User             @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, isRead, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+// =============================================================================
+// PAYMENTS
+// =============================================================================
+
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  orderId        String?       @unique @db.Uuid
+  subscriptionId String?       @db.Uuid
+  userId         String        @db.Uuid
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String        @default("INR") @db.VarChar(5)
+  method         PaymentMethod
+  status         PaymentStatus @default(pending)
+  gatewayTxnId   String?       @db.VarChar(255)
+  gatewayResponse Json?
+  refundAmount   Decimal?      @db.Decimal(10, 2)
+  refundedAt     DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  order          Order?        @relation(fields: [orderId], references: [id])
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([orderId])
+  @@index([subscriptionId])
+  @@index([userId, status])
+  @@map("payments")
+}
+
+// =============================================================================
+// EARNINGS (Provider Ledger)
+// =============================================================================
+
+model Earning {
+  id          String   @id @default(uuid()) @db.Uuid
+  providerId  String   @db.Uuid
+  orderId     String?  @db.Uuid
+  amount      Decimal  @db.Decimal(10, 2)
+  commission  Decimal  @default(0) @db.Decimal(10, 2)
+  netAmount   Decimal  @db.Decimal(10, 2)
+  description String?  @db.VarChar(300)
+  settledAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, createdAt(sort: Desc)])
+  @@index([settledAt])
+  @@map("earnings")
+}
+
+// =============================================================================
+// COUPONS
+// =============================================================================
+
+model Coupon {
+  id              String     @id @default(uuid()) @db.Uuid
+  code            String     @unique @db.VarChar(30)
+  description     String?    @db.VarChar(300)
+  type            CouponType
+  value           Decimal    @db.Decimal(10, 2)
+  minOrderAmount  Decimal    @default(0) @db.Decimal(10, 2)
+  maxDiscount     Decimal?   @db.Decimal(10, 2)
+  usageLimit      Int?
+  usedCount       Int        @default(0)
+  perUserLimit    Int        @default(1)
+  isActive        Boolean    @default(true)
+  validFrom       DateTime
+  validUntil      DateTime
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  orders          Order[]
+
+  @@index([code])
+  @@index([isActive, validUntil])
+  @@map("coupons")
+}
